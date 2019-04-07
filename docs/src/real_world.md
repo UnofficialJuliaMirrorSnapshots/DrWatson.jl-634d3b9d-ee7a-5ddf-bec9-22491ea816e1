@@ -1,0 +1,315 @@
+# Real World Examples
+
+## Easy local directories
+I setup all my science projects using DrWatson's suggested setup, using [`initialize_project`](@ref). Then, every file in every project has a start that looks like this:
+```julia
+using DrWatson
+quickactivate(@__DIR__, "MagneticBilliardsLyapunovs")
+using DynamicalBilliards, PyPlot, LinearAlgebra
+
+include(srcdir()*"plot_perturbationgrowth.jl")
+include(srcdir()*"unitcells.jl")
+```
+In all projects I save data/plots using `datadir/plotdir`:
+```julia
+tagsave(datadir()*"mushrooms/Λ_N=$N.bson", (@dict Λ Λσ ws hs description))
+```
+The advantage of this approach is that it will always work regardless of if I move the specific file to a different subfolder (which is very often necessary) or whether I move the entire project folder somewhere else!
+**Please be sure you have understood the caveat of using [`quickactivate`](@ref)!**
+
+Here is an example from another project. You will notice that another advantage is that I can use identical syntax to access the data or source folders even though I have different projects!
+```julia
+using DrWatson
+quickactivate(@__DIR__, "EmbeddingResearch")
+using Parameters
+using TimeseriesPrediction, LinearAlgebra, Statistics
+
+include(srcdir()*"systems/barkley.jl")
+include(srcdir()*"nrmse.jl")
+```
+that ends with
+```julia
+tagsave(
+    savename(datadir()*"sim/bk", simulation, "jld2"),
+    @strdict U V simulation
+)
+```
+
+## `savename` and tagging
+The combination of using [`savename`](@ref) and [`tagsave`](@ref) makes it easy and fast to save output in a way that is consistent, robust and reproducible. Here is an example from a project:
+```julia
+using DrWatson
+quickactivate(@__DIR__, "EmbeddingResearch")
+using TimeseriesPrediction, LinearAlgebra, Statistics
+include(srcdir()*"systems/barkley.jl")
+
+ΔTs = [1.0, 0.5, 0.1] # resolution of the saved data
+Ns = [50, 150] # spatial extent
+for N ∈ Ns, ΔT ∈ ΔTs
+    T = 10050 # we can offset up to 1000 units
+    every = round(Int, ΔT/barkley_Δt)
+    seed = 1111
+
+    simulation = @ntuple T N ΔT seed
+    U, V = barkley(T, N, every; seed = seed)
+
+    tagsave(
+        savename(datadir()*"sim/bk", simulation, "bson"),
+        @dict U V simulation
+    )
+end
+```
+This saves files that look like:
+```
+path/to/project/data/sim/bk_N=50_T=10050_seed=1111_ΔT=1.bson
+```
+and each file is a dictionary with four fields: `:U, :V, :simulation, :commit`. When I read this file I know exactly what was the source code that produced it (provided that I am not sloppy and commit code changes regularly :P).
+
+## Customizing `savename`
+Here is a simple (but not from a real project) example for customizing [`savename`](@ref). We are using a common struct `Experiment` across different experiments with cats and mice.
+In this example we are also using Parameters.jl for a convenient default constructor.
+
+We first define the relevant types.
+```@example customizing
+using DrWatson, Parameters, Dates
+
+# Define a type hierarchy we use at experiments
+abstract type Species end
+struct Mouse <: Species end
+struct Cat <: Species end
+
+@with_kw struct Experiment{S<:Species}
+    n::Int = 50
+    c::Float64 = 10.0
+    x::Float64 = 0.2
+    date::Date = Date(Dates.now())
+    species::S = Mouse()
+    scientist::String = "George"
+end
+
+e1 = Experiment()
+e2 = Experiment(species = Cat())
+```
+
+For analyzing our experiments we need information about the species used, and to use multiple dispatch latter on we decided to make this information associated with a Type.
+
+Now, we want to customize [`savename`](@ref). We start by extending [`DrWatson.default_prefix`](@ref):
+```@example customizing
+DrWatson.default_prefix(e::Experiment) = "Experiment_"*string(e.date)
+
+savename(e1)
+```
+However this is not good enough for us, as the information about the species is not contained in [`savename`](@ref). We have to extend [`DrWatson.default_allowed`](@ref) like so:
+```@example customizing
+DrWatson.default_allowed(::Experiment) = (Real, String, Species)
+
+savename(e1)
+```
+To make printing better we can extend `Base.string`, which is what DrWatson uses internally in [`savename`](@ref) to display values.
+```@example customizing
+Base.string(::Mouse) = "mouse"
+Base.string(::Cat) = "cat"
+nothing # hide
+```
+
+Lastly, let's say that the information of which scientist performed the experiment is not really relevant for `savename`. We can extend the last method, [`DrWatson.allaccess`](@ref):
+```@example customizing
+DrWatson.allaccess(::Experiment) = (:n, :c, :x, :species)
+```
+so that only those four fields will be used (notice that the `date` field is anyway used in `default_prefix`). We finally have:
+```@example customizing
+println( savename(e1) )
+println( savename(e2) )
+```
+
+## Stopping "Did I run this?"
+It can become very tedious to have a piece of code that you may or may not have run and may or may not have saved the produced data. You then constantly ask yourself "Did I run this?". Typically one uses `isfile` and an `if` clause to either load a file or run some code. Especially in the cases where the code takes only a couple of minutes to finish you are left in a dilemma "Is it even worth it to save?".
+
+This is the dilemma that [`produce_or_load`](@ref) resolves. You can wrap your code in a function and then [`produce_or_load`](@ref) will take care of the rest for you! I found it especially useful in scripts that generate figures for a publication.
+
+Here is an example; originally I had this piece of code:
+```julia
+HTEST = 0.1:0.1:2.0
+WS = [0.5, 1.0, 1.5]
+N = 10000; T = 10000.0
+
+toypar_h = [[] for l in HS]
+for (wi, w) in enumerate(WS)
+    println("w = $w")
+    for h in HTEST
+        toyp = toyparameters(h, w, N, T)
+        push!(toypar_h[wi], toyp)
+    end
+end
+```
+that was taking some minutes to run. To use the function [`produce_or_load`](@ref) I first have to wrap this code in a high level function like so:
+```julia
+HTEST = 0.1:0.1:2.0
+WS = [0.5, 1.0, 1.5]
+
+function g(d)
+    @unpack N, T = d
+
+    toypar_h = [[] for l in HS]
+    for (wi, w) in enumerate(WS)
+        println("w = $w")
+        for h in HTEST
+            toyp = toyparameters(h, w, N, T)
+            push!(toypar_h[wi], toyp)
+        end
+    end
+
+    return @dict toypar_h
+end
+
+N = 2000; T = 2000.0
+file = produce_or_load(
+    datadir()*"mushrooms/toy", # prefix
+    @dict(N, T), # container
+    g # function
+)
+@unpack toypar_h = file
+```
+Now, every time I run this code block the function tests automatically whether the file exists. Only if it does not then the code is run.
+
+The extra step is that I have to extract the useful data I need from the container `file`. Thankfully the `@unpack` macro from [Parameters.jl](https://mauro3.github.io/Parameters.jl/stable/manual.html) makes this super easy.
+
+## Preparing runs
+Here is a shortened script from a project that uses [`dict_list`](@ref):
+```@example customizing
+using DrWatson
+
+general_args = Dict(
+    "model" => ["barkley", "kuramoto"],
+    "noise" => 0.075,
+    "noisy_training" => [true, false],
+    "N" => [100],
+    "embedding" => [ #(γ, τ, r, c)
+    (4, 5, 1, 0.34), (4, 6, 1, 0.28)]
+)
+```
+
+```@example customizing
+dicts = dict_list(general_args)
+println("Total dictionaries made: ", length(dicts))
+dicts[1]
+```
+Now how you use these dictionaries is up to you. Here we will use `map` (identical process for using `pmap`) but in other scenarios you might want to submit many individual jobs to a computer cluster.
+
+Let's say I have written a function that takes in one of these dictionaries and saves the file somewhere locally:
+```@example customizing
+function cross_estimation(data)
+    γ, τ, r, c = data["embedding"]
+    N = data["N"]
+    # add fake results:
+    data["x"] = rand()
+    data["error"] = rand(10)
+    # Save data:
+    prefix = datadir()*"results/"*data["model"]
+    get(data, "noisy_training", false) && (prefix *= "_noisy")
+    save(
+        savename(
+            prefix,
+            (@dict γ τ r c N),
+            "bson"
+            ),
+        data
+    )
+    return true
+end
+```
+
+To run all my simulations I just do:
+```@example customizing
+mkpath(datadir()*"results")
+dicts = dict_list(general_args)
+map(cross_estimation, dicts)
+
+# load one of the files to be sure everything is ok:
+filename = readdir(datadir()*"results")[1]
+file = load(datadir()*"results/"*filename)
+```
+
+## Listing completed runs
+Continuing from the above example, we now want to collect the results of all these simulations into a single `DataFrame`. We will do that with the function [`collect_results!`](@ref).
+
+It is quite simple actually! But because we don't want to include the error, we have to black-list it:
+```@example customizing
+using DataFrames # this is necessary to access collect_results!
+black_list = ["error"]
+res = collect_results!(datadir()*"results"; black_list = black_list)
+```
+
+We can take also advantage of the basic processing functionality of [`collect_results!`](@ref) to use the excluded `"error"` column, replacing it with its average value:
+```@example customizing
+using Statistics: mean
+special_list = [:avrg_error => data -> mean(data["error"])]
+res = collect_results(
+      datadir()*"results",
+      black_list = black_list,
+      special_list = special_list
+)
+
+deletecols!(res, :path) # don't show path this time
+```
+
+As you see here we used [`collect_results`](@ref) instead of the in-place version, since there already exists a dataframe with all results processed (and thus everything would be skipped).
+
+## Adapting to new data/parameters
+We once again continue from the above example. But we suddenly realize that we need to run some new simulations with some new parameters that _do not exist_ in the old simulations... Well, DrWatson says "no problemo!" :)
+
+Let's save these new parameters in a different subfolder, to have neatly organized project:
+```@example customizing
+general_args_new = Dict(
+    "model" => ["bocf"],
+    "symmetry" => "radial",
+    "symmetric_training" => [true, false],
+    "N" => [100],
+    "embedding" => [ #(γ, τ, r, c)
+    (4, 5, 1, 0.34), (4, 6, 1, 0.28)]
+)
+```
+As you can see, there here there are two parameters not existing in previous simulations, namely `"symmetry", "symmetric_training"`. In addition, the parameters `"noise", "noisy_training"` that existed in the _previous_ simulations do not exist in the current one.
+
+No problem though, let's run the new simulations:
+```@example customizing
+mkpath(datadir()*"results/sym")
+
+function cross_estimation_new(data)
+    γ, τ, r, c = data["embedding"]
+    N = data["N"]
+    # add fake results:
+    data["x"] = rand()
+    data["error"] = rand(10)
+    # Save data:
+    prefix = datadir()*"results/sym/"*data["model"]
+    get(data, "symmetric_training", false) && (prefix *= "_symmetric")
+    save(
+        savename(
+            prefix,
+            (@dict γ τ r c N),
+            "bson"
+            ),
+        data
+    )
+    return true
+end
+
+dicts = dict_list(general_args_new)
+map(cross_estimation_new, dicts)
+
+# load one of the files to be sure everything is ok:
+filename = readdir(datadir()*"results/sym")[1]
+file = load(datadir()*"results/sym/"*filename)
+```
+
+Alright, now we want to _add_ these new runs to our existing dataframe that has collected all previous results. This is straight-forward:
+```@example customizing
+res = collect_results!(datadir()*"results";
+      black_list = black_list, subfolders = true)
+
+deletecols!(res, :path) # don't show path
+```
+(`subfolders = true` ensures that we scan the new data)
+
+All `missing` entries were adjusted automatically :)
