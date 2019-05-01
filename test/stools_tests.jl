@@ -1,9 +1,32 @@
 using DrWatson, Test
 
 # Test commit function
+com = current_commit(@__DIR__)
+@test com === nothing
+
 com = current_commit(dirname(@__DIR__))
 @test com !== nothing
 @test typeof(com) == String
+
+# tag!
+d1 = Dict(:x => 3, :y => 4)
+d2 = Dict("x" => 3, "y" => 4)
+for d in (d1, d2)
+    d = tag!(d, dirname(@__DIR__))
+
+    @test haskey(d, keytype(d)(:commit))
+    @test d[keytype(d)(:commit)] |> typeof == String
+end
+
+# @tag!
+for d in (d1, d2)
+    d = @tag!(d, @__DIR__)
+    @test !haskey(d, keytype(d)(:commit))
+
+    d = @tag!(d, dirname(@__DIR__))
+    @test d[keytype(d)(:commit)] |> typeof == String
+    @test d[keytype(d)(:script)][1:4] == "test"
+end
 
 # Test dictionary expansion
 c = Dict(:a => [1, 2], :b => 4);
@@ -14,6 +37,7 @@ v1 = dict_list(c)
 for el in c1
     @test el ∈ v1
 end
+@test keytype(eltype(v1)) == Symbol
 
 c[:c] = "test"; c[:d] = ["lala", "lulu"];
 c2 = [ Dict(:a=>1,:b=>4,:d=>"lala",:c=>"test")
@@ -25,7 +49,7 @@ v2 = dict_list(c)
 for el in c2
     @test el ∈ v2
 end
-
+@test keytype(eltype(v2)) == Symbol
 
 c[:e] = [[1, 2], [3, 5]];
 c3 = [
@@ -44,13 +68,13 @@ v3 = dict_list(c)
 for el in c3
     @test el ∈ v3
 end
+@test keytype(eltype(v3)) == Symbol
 
-# tag!
-d1 = Dict(:x => 3, :y => 4)
-d2 = Dict("x" => 3, "y" => 4)
-for d in (d1, d2)
-    d = tag!(d, dirname(@__DIR__))
+v4 = dict_list(Dict(:a => 1, :b => 2.0)) # both non-iterable
+@test keytype(eltype(v4)) == Symbol
 
-    @test haskey(d, keytype(d)(:commit))
-    @test d[keytype(d)(:commit)] |> typeof == String
-end
+v5 = dict_list(Dict(:a => [1], :b => 2.0)) # one non-iterable
+@test keytype(eltype(v5)) == Symbol
+
+v6 = dict_list(Dict(:a => [1], :b => [2.0])) # both iterable
+@test keytype(eltype(v6)) == Symbol

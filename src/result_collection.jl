@@ -120,7 +120,7 @@ but not `df`, a new column will be added and filled with `missing`
 in `df`. Then `df` and `df_new` are concatenated.
 """
 function merge_dataframes!(df1, df2)
-    if names(df1) == names(df2)
+    if sort!(names(df1)) == sort!(names(df2))
         return vcat(df1, df2)
     else
         for m ∈ setdiff(names(df1), names(df2))
@@ -138,8 +138,8 @@ is_valid_file(file, valid_filetypes) =
 
 function to_data_row(data, file;
         white_list = collect(keys(data)),
-        black_list = [],
-        special_list = [])
+        black_list = keytype(data)[],
+        special_list = keytype(data)[])
     cnames = setdiff!(white_list, black_list)
     df = DataFrames.DataFrame(
         (Symbol.(cnames) .=> (x->[x]).(getindex.(Ref(data),cnames)))...
