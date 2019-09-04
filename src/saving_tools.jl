@@ -10,7 +10,8 @@ in `gitpath`, which by default is the currently active project. If the repositor
 is dirty when this function is called the string will end
 with `"_dirty"`.
 
-Return `nothing` if `gitpath` is not a Git repository.
+Return `nothing` if `gitpath` is not a Git repository, i.e. a directory within a git
+repository.
 
 The format of the `git describe` output in general is
 
@@ -41,7 +42,7 @@ julia> gitdescribe(path_to_a_dirty_repo)
 function gitdescribe(gitpath = projectdir())
     # Here we test if the gitpath is a git repository.
     try
-        repo = LibGit2.GitRepo(gitpath)
+        repo = LibGit2.GitRepoExt(gitpath)
     catch er
         @warn "The directory ('$gitpath') is not a Git repository, "*
               "returning `nothing` instead of the commit ID."
@@ -54,7 +55,7 @@ function gitdescribe(gitpath = projectdir())
     end
     # then we return the output of `git describe` or the latest commit hash
     # if no annotated tags are available
-    repo = LibGit2.GitRepo(gitpath)
+    repo = LibGit2.GitRepoExt(gitpath)
     c = try
         gdr = LibGit2.GitDescribeResult(repo)
         fopt = LibGit2.DescribeFormatOptions(dirty_suffix=pointer(suffix))
@@ -65,18 +66,47 @@ function gitdescribe(gitpath = projectdir())
     return c
 end
 
-@deprecate current_commit gitdescribe
+"""
+    gitpatch(gitpath = projectdir())
+
+Generates a patch describing the changes of a dirty repository
+compared to its last commit; i.e. what `git diff HEAD` produces.
+The `gitpath` needs to point to a directory within a git repository,
+otherwise `nothing` is returned.
+"""
+function gitpatch(gitpath = projectdir())
+    try
+        repo = LibGit2.GitRepoExt(gitpath)
+    catch er
+        @warn "The directory ('$gitpath') is not a Git repository, "*
+              "returning `nothing` instead of a patch."
+        return nothing
+    end
+    # tree = LibGit2.GitTree(repo, "HEAD^{tree}")
+    # diff = LibGit2.diff_tree(repo, tree)
+    # now there is no way to generate the patch with LibGit2.jl.
+    # Instead use commands:
+    patch = read(`git -C $(gitpath) diff HEAD`, String)
+    return patch
+end
 
 """
-    tag!(d::Dict, gitpath = projectdir()) -> d
-Tag `d` by adding an extra field `commit` which will have as value
+    tag!(d::Dict, gitpath = projectdir(), storepatch = true) -> d
+Tag `d` by adding an extra field `gitcommit` which will have as value
 the [`gitdescribe`](@ref) of the repository at `gitpath` (by default
-the project's gitpath). Do nothing if a key `commit` already exists or
-if the Git repository is not found.
+the project's gitpath). Do nothing if a key `gitcommit` already exists
+or if the Git repository is not found. If the git repository is dirty,
+i.e. there are un-commited changes, then the output of `git diff HEAD`
+is stored in the field `gitpatch`.  Note that patches for binary files
+are not stored.
 
 Notice that if `String` is not a subtype of the value type of `d` then
-a new dictionary is created and returned. Otherwise the operation
-is inplace (and the dictionary is returned again).
+a new dictionary is created and returned. Otherwise the operation is
+inplace (and the dictionary is returned again).
+
+To restore a repository to the state of a particular model-run do:
+1. checkout the relevant commit with `git checkout xyz` where xyz is the value stored
+2. apply the patch `git apply patch`, where the string stored in the `gitpatch` field needs to be written to the file `patch`.
 
 ## Examples
 ```julia
@@ -87,32 +117,46 @@ Dict{Symbol,Int64} with 2 entries:
 
 julia> tag!(d)
 Dict{Symbol,Any} with 3 entries:
-  :y      => 4
-  :commit => "96df587e45b29e7a46348a3d780db1f85f41de04"
-  :x      => 3
+  :y => 4
+  :gitcommit => "96df587e45b29e7a46348a3d780db1f85f41de04"
+  :x => 3
 ```
 """
-function tag!(d::Dict{K, T}, gitpath = projectdir(), source = nothing) where {K, T}
+function tag!(d::Dict{K, T}, gitpath = projectdir(), storepatch = true, source = nothing) where {K, T}
 
     c = gitdescribe(gitpath)
-    c === nothing && return d
-    if haskey(d, K("commit"))
-        @warn "The dictionary already has a key named `commit`. We won't "*
+    patch = gitpatch(gitpath)
+    @assert (Symbol <: K) || (String <: K)
+    if K == Symbol
+        commitname, patchname, scriptname = :gitcommit, :gitpatch, :script
+    else
+        commitname, patchname, scriptname = "gitcommit", "gitpatch", "script"
+    end
+
+    c === nothing && return d # gitpath is not a git repo
+    if haskey(d, commitname)
+        @warn "The dictionary already has a key named `gitcommit`. We won't "*
         "add any Git information."
         return d
     end
     if String <: T
-        d[K("commit")] = c
+        d[commitname] = c
+        if patch!=""
+            d[patchname] = patch
+        end
     else
         d = Dict{K, promote_type(T, String)}(d)
-        d[K("commit")] = c
+        d[commitname] = c
+        if patch!=""
+            d[patchname] = patch
+        end
     end
     if source != nothing
-        if haskey(d, K("script"))
+        if haskey(d, scriptname)
             @warn "The dictionary already has a key named `script`. We won't "*
             "overwrite it with the script name."
         else
-            d[K("script")] = relpath(sourcename(source), gitpath)
+            d[scriptname] = relpath(sourcename(source), gitpath)
         end
     end
     return d
@@ -135,14 +179,14 @@ julia> d = Dict(:x => 3)Dict{Symbol,Int64} with 1 entry:
 
 julia> @tag!(d) # running from a script or inline evaluation of Juno
 Dict{Symbol,Any} with 3 entries:
-  :commit => "618b72bc0936404ab6a4dd8d15385868b8299d68"
+  :gitcommit => "618b72bc0936404ab6a4dd8d15385868b8299d68"
   :script => "test\\stools_tests.jl#10"
   :x      => 3
 ```
 """
-macro tag!(d, gitpath = projectdir())
+macro tag!(d, gitpath = projectdir(), storepatch = true)
     s = QuoteNode(__source__)
-    :(tag!($(esc(d)), $(esc(gitpath)), $s))
+    :(tag!($(esc(d)), $(esc(gitpath)), $(esc(storepatch)), $s))
 end
 
 """

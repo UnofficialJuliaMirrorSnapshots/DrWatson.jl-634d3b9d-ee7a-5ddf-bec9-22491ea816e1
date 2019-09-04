@@ -26,32 +26,35 @@ safesave
 ```
 
 ## Tagging a run using Git
-For reproducibility reasons (and also to not go insane when asking "HOW DID I GET THOSE RESUUUULTS") it is useful to "tag" any simulation/result/process with the Git commit of the repository.
+For reproducibility reasons (and also to not go insane when asking "HOW DID I GET THOSE RESUUUULTS") it is useful to "tag" any simulation/result/process using the Git status of the repository.
 
 To this end we have some functions that can be used to ensure reproducibility:
-
-```@docs
-gitdescribe
-tag!
-@tag!
-```
-
-Please notice that `tag!` will operate in place only when possible. If not possible then a new dictionary is returned. Also (importantly) these functions will **never error** as they are most commonly used when saving simulations and this could risk data not being saved!
-
-### Automatic Tagging during Saving
-
-If you don't want to always call `tag!` before saving a file, you can just use `tagsave` or `@tagsave`, which can also nicely incorporate [`safesave`](@ref) if need be!
 ```@docs
 tagsave
 @tagsave
 ```
+The functions also incorporate [`safesave`](@ref) if need be.
+
+### Low level functions
+[`@tagsave`](@ref) internally uses the following low level functions:
+```@docs
+tag!
+@tag!
+gitdescribe
+DrWatson.gitpatch
+```
+
+Please notice that `tag!` will operate in place only when possible. If not possible then a new dictionary is returned. Also (importantly) these functions will **never error** as they are most commonly used when saving simulations and this could risk data not being saved!
+
 
 ## Produce or Load
 
 `produce_or_load` is a function that very conveniently integrates with [`savename`](@ref) to either load a file if it exists, or if it doesn't to produce it, save it and then return it!
 
-This saves you the effort of checking if a file exists and then loading, or then running some code and saving, or writing a bunch of `if` clauses in your code! `produce_or_load` really shines when used in interactive sessions where some results require a couple of minutes to complete.
+This saves you the effort of checking if a file exists and then loading, or then running some code and saving, or writing a bunch of `if` clauses in your code.
+In addition, it attempts to minimize computing energy spent on getting a result.
 
 ```@docs
 produce_or_load
 ```
+See [Stopping "Did I run this?"](@ref) for an example usage of `produce_or_load`.

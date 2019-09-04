@@ -6,10 +6,10 @@ Let `s = joinpath(path, savename(prefix, c, suffix))`.
 If a file named `s` exists then load it and return it, along
 with the global path that it is saved at (`s`).
 
-If the file does not exist then call `file = f(c)`, save `file` as
-`s` and then return `file, s`.
-The function `f` must return a dictionary.
-The macros [`@dict`](@ref) and [`@strdict`](@ref) can help with that.
+If the file does not exist then call `file = f(c)`, with `f` your function
+that produces your data. Then save `file` as `s` and then return `file, s`.
+The function `f` must return a dictionary,
+the macros [`@dict`](@ref) and [`@strdict`](@ref) can help with that.
 
 ## Keywords
 * `tag = true` : Save the file using [`tagsave`](@ref).
@@ -19,8 +19,9 @@ The macros [`@dict`](@ref) and [`@strdict`](@ref) can help with that.
   it and save it anyway.
 * `loadfile = true` : If `false`, this function does not actually load the
   file, but only checks if it exists. The return value in this case is always
-  `nothing, s`, regardless of whether the file must be produced or not.
-* `verbose = true` : print info about the process.
+  `nothing, s`, regardless of whether the file exists or not. If it doesn't
+  exist it is still produced and saved.
+* `verbose = true` : print info about the process, if the file doesn't exist.
 * `kwargs...` : All other keywords are propagated to `savename`.
 
 See also [`savename`](@ref).
@@ -52,8 +53,9 @@ function produce_or_load(path::String, c, f;
             if tag
                 tagsave(s, file, false, gitpath)
             else
-            wsave(s, copy(file))
-        end
+                wsave(s, copy(file))
+            end
+            verbose && @info "File $s saved."
         catch er
             @warn "Could not save file, got error $er. "*
             "\nReturning the file if `loadfile=true`."
@@ -70,13 +72,18 @@ end
 #                             tag saving                                       #
 ################################################################################
 """
-    tagsave(file::String, d::Dict [, safe = false, gitpath = projectdir()])
+    tagsave(file::String, d::Dict [, safe = false, gitpath = projectdir(), storepatch = true])
 First [`tag!`](@ref) dictionary `d` and then save `d` in `file`.
 If `safe = true` save the file using [`safesave`](@ref).
+
+"Tagging" means that when saving the dictionary, an extra field `:gitcommit` is added to
+establish reproducibility of results using Git. If the Git repository is dirty,
+one more field `:gitpatch` is added that stores the difference string.
+For more, see [`tag!`](@ref).
 """
 tagsave(file, d, p::String) = tagsave(file, d, false, p)
-function tagsave(file, d, safe = false, gitpath = projectdir(), s = nothing)
-    d2 = tag!(d, gitpath, s)
+function tagsave(file, d, safe = false, gitpath = projectdir(), storepatch = true, s = nothing)
+    d2 = tag!(d, gitpath, storepatch, s)
     mkpath(dirname(file))
     if safe
         safesave(file, copy(d2))
@@ -88,12 +95,12 @@ end
 
 """
     @tagsave(file::String, d::Dict [, safe = false, gitpath = projectdir()])
-Same as [`tagsave`](@ref) but also add a field `script` that records
-the local path of the script that called `@tagsave`, see [`@tag!`](@ref).
+Same as [`tagsave`](@ref) but one more field `:script` is added that records
+the local path of the script and line number that called `@tagsave`, see [`@tag!`](@ref).
 """
-macro tagsave(file, d, safe::Bool = false, gitpath = projectdir())
+macro tagsave(file, d, safe::Bool = false, gitpath = projectdir(), storepatch = true)
     s = QuoteNode(__source__)
-    :(tagsave($(esc(file)), $(esc(d)), $(esc(safe)), $(esc(gitpath)), $s))
+    :(tagsave($(esc(file)), $(esc(d)), $(esc(safe)), $(esc(gitpath)), $(esc(storepatch)), $s))
 end
 
 ################################################################################
@@ -164,7 +171,7 @@ See also [`dict_list`](@ref).
 
 ## Keywords
 * `l = 8` : number of characters in the random string.
-* `prefix = ""` : prefix each temporary name with this.
+* `prefix = ""` : prefix each temporary name will have.
 * `suffix = "bson"` : ending of the temporary names (no need for the dot).
 """
 function tmpsave(dicts, tmp = projectdir("_research", "tmp");

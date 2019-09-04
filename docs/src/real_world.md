@@ -12,7 +12,7 @@ include(srcdir("unitcells.jl"))
 ```
 In all projects I save data/plots using `datadir/plotdir`:
 ```julia
-tagsave(datadir("mushrooms, "Λ_N=$N.bson"), (@dict Λ Λσ ws hs description))
+@tagsave(datadir("mushrooms, "Λ_N=$N.bson"), (@dict Λ Λσ ws hs description))
 ```
 The advantage of this approach is that it will always work regardless of if I move the specific file to a different subfolder (which is very often necessary) or whether I move the entire project folder somewhere else!
 **Please be sure you have understood the caveat of using [`quickactivate`](@ref)!**
@@ -26,13 +26,10 @@ using TimeseriesPrediction, LinearAlgebra, Statistics
 
 include(srcdir("systems", "barkley.jl"))
 include(srcdir("nrmse.jl")
-```
-that ends with
-```julia
-tagsave(
-    savename(datadir("sim", "bk"), simulation, "jld2"),
-    @strdict U V simulation
-)
+
+# stuff...
+
+save(datadir("sim", "barkley", "astonishing_results.bson"), data)
 ```
 
 ## `savename` and tagging
@@ -53,8 +50,8 @@ for N ∈ Ns, ΔT ∈ ΔTs
     simulation = @ntuple T N ΔT seed
     U, V = barkley(T, N, every; seed = seed)
 
-    tagsave(
-        savename(datadir("sim", "bk"), simulation, "bson"),
+    @tagsave(
+        datadir("sim", "bk", savename(simulation, "bson")),
         @dict U V simulation
     )
 end
@@ -63,10 +60,10 @@ This saves files that look like:
 ```
 path/to/project/data/sim/bk_N=50_T=10050_seed=1111_ΔT=1.bson
 ```
-and each file is a dictionary with four fields: `:U, :V, :simulation, :commit`. When I read this file I know exactly what was the source code that produced it (provided that I am not sloppy and commit code changes regularly :P).
+and each file is a dictionary that has my data fields: `:U, :V, :simulation`, but also `:gitcommit, :script`. When I read this file I know exactly what was the source code that produced it (provided that I am not sloppy and commit code changes regularly :P).
 
 ## Customizing `savename`
-Here is a simple (but not from a real project) example for customizing [`savename`](@ref). We are using a common struct `Experiment` across different experiments with cats and mice.
+Here is a simple example for customizing [`savename`](@ref). We are using a common struct `Experiment` across different experiments with cats and mice.
 In this example we are also using Parameters.jl for a convenient default constructor.
 
 We first define the relevant types.
@@ -78,6 +75,7 @@ abstract type Species end
 struct Mouse <: Species end
 struct Cat <: Species end
 
+# @with_kw comes from Parameters.jl
 @with_kw struct Experiment{S<:Species}
     n::Int = 50
     c::Float64 = 10.0
@@ -91,7 +89,7 @@ e1 = Experiment()
 e2 = Experiment(species = Cat())
 ```
 
-For analyzing our experiments we need information about the species used, and to use multiple dispatch latter on we decided to make this information associated with a Type.
+For analyzing our experiments we need information about the species used, and to use multiple dispatch latter on we decided to make this information associated with a Type. This is why we defined `Species`.
 
 Now, we want to customize [`savename`](@ref). We start by extending [`DrWatson.default_prefix`](@ref):
 ```@example customizing
@@ -109,14 +107,14 @@ To make printing better we can extend `Base.string`, which is what DrWatson uses
 ```@example customizing
 Base.string(::Mouse) = "mouse"
 Base.string(::Cat) = "cat"
-nothing # hide
+savename(e1)
 ```
 
 Lastly, let's say that the information of which scientist performed the experiment is not really relevant for `savename`. We can extend the last method, [`DrWatson.allaccess`](@ref):
 ```@example customizing
 DrWatson.allaccess(::Experiment) = (:n, :c, :x, :species)
 ```
-so that only those four fields will be used (notice that the `date` field is anyway used in `default_prefix`). We finally have:
+so that only those four fields will be used (notice that the `date` field is already used in `default_prefix`). We finally have:
 ```@example customizing
 println( savename(e1) )
 println( savename(e2) )
@@ -194,13 +192,12 @@ end
 ```
 that was taking some minutes to run. To use the function [`produce_or_load`](@ref) I first have to wrap this code in a high level function like so:
 ```julia
-HTEST = 0.1:0.1:2.0
-WS = [0.5, 1.0, 1.5]
-
 function g(d)
+    HTEST = 0.1:0.1:2.0
+    WS = [0.5, 1.0, 1.5]
     @unpack N, T = d
-
     toypar_h = [[] for l in HS]
+
     for (wi, w) in enumerate(WS)
         println("w = $w")
         for h in HTEST
@@ -208,19 +205,19 @@ function g(d)
             push!(toypar_h[wi], toyp)
         end
     end
-
     return @dict toypar_h
 end
 
 N = 2000; T = 2000.0
 file = produce_or_load(
-    datadir("mushrooms", "toy"), # prefix
+    datadir("mushrooms", "toy"), # path
     @dict(N, T), # container
-    g # function
+    g, # function
+    prefix = "fig5_toyparams" # prefix for savename
 )
 @unpack toypar_h = file
 ```
-Now, every time I run this code block the function tests automatically whether the file exists. Only if it does not then the code is run.
+Now, every time I run this code block the function tests automatically whether the file exists. Only if it does not, then the code is run while the new result is saved to ensure I won't have to run it again.
 
 The extra step is that I have to extract the useful data I need from the container `file`. Thankfully the `@unpack` macro from [Parameters.jl](https://mauro3.github.io/Parameters.jl/stable/manual.html) makes this super easy.
 
@@ -245,7 +242,7 @@ dicts = dict_list(general_args)
 println("Total dictionaries made: ", length(dicts))
 dicts[1]
 ```
-Now how you use these dictionaries is up to you. Typically each dictionary is given to a `main`-like Julia function which extracts the necessary data and calls the necessary functions.
+Now, how you use these dictionaries is up to you. Typically each dictionary is given to a `main`-like Julia function which extracts the necessary data and calls the necessary functions.
 
 Let's say I have written a function that takes in one of these dictionaries and saves the file somewhere locally:
 ```@example customizing
@@ -258,14 +255,10 @@ function cross_estimation(data)
     # Save data:
     prefix = datadir("results", data["model"])
     get(data, "noisy_training", false) && (prefix *= "_noisy")
-    save(
-        savename(
-            prefix,
-            (@dict γ τ r c N),
-            "bson"
-            ),
-        data
-    )
+    get(data, "symmetric_training", false) && (prefix *= "_symmetric")
+    sname = savename((@dict γ τ r c N), "bson")
+    mkpath(datadir("results", data["model"]))
+    save(datadir("results", data["model"], sname), data)
     return true
 end
 ```
@@ -275,13 +268,12 @@ end
 One way to run many simulations is with `map` (identical process for using `pmap`).
 To run all my simulations I just do:
 ```@example customizing
-mkpath(datadir("results"))
 dicts = dict_list(general_args)
 map(cross_estimation, dicts) # or pmap
 
 # load one of the files to be sure everything is ok:
-filename = readdir(datadir("results"))[1]
-file = load(datadir("results", filename))
+filename = readdir(datadir("results", "barkley"))[1]
+file = load(datadir("results", "barkley", filename))
 ```
 
 ### Using a Serial Cluster
@@ -314,8 +306,8 @@ Continuing from the [Preparing & running jobs](@ref) section, we now want to col
 It is quite simple actually! But because we don't want to include the error, we have to black-list it:
 ```@example customizing
 using DataFrames # this is necessary to access collect_results!
-black_list = ["error"]
-res = collect_results!(datadir("results"); black_list = black_list)
+bl = ["error"]
+res = collect_results!(datadir("results"); black_list = bl, subfolders = true)
 ```
 
 We can take also advantage of the basic processing functionality of [`collect_results!`](@ref) to use the excluded `"error"` column, replacing it with its average value:
@@ -324,17 +316,18 @@ using Statistics: mean
 special_list = [:avrg_error => data -> mean(data["error"])]
 res = collect_results(
       datadir("results"),
-      black_list = black_list,
-      special_list = special_list
+      black_list = bl,
+      special_list = special_list,
+      subfolders = true
 )
 
-deletecols!(res, :path) # don't show path this time
+select!(res, Not(:path)) # don't show path this time
 ```
 
 As you see here we used [`collect_results`](@ref) instead of the in-place version, since there already exists a `DataFrame` with all results processed (and thus everything would be skipped).
 
 ## Adapting to new data/parameters
-We once again continue from the above example. But we suddenly realize that we need to run some new simulations with some new parameters that _do not exist_ in the old simulations... Well, DrWatson says "no problem!" :)
+We once again continue from the above example. But we no we need to run some new simulations with some new parameters that _do not exist_ in the old simulations... Well, DrWatson says "no problem!" :)
 
 Let's save these new parameters in a different subfolder, to have a neatly organized project:
 ```@example customizing
@@ -351,43 +344,18 @@ As you can see, there here there are two parameters not existing in previous sim
 
 No problem though, let's run the new simulations:
 ```@example customizing
-mkpath(datadir("results", "sym"))
-
-function cross_estimation_new(data)
-    γ, τ, r, c = data["embedding"]
-    N = data["N"]
-    # add fake results:
-    data["x"] = rand()
-    data["error"] = rand(10)
-    # Save data:
-    prefix = datadir("results", "sym", data["model"])
-    get(data, "symmetric_training", false) && (prefix *= "_symmetric")
-    save(
-        savename(
-            prefix,
-            (@dict γ τ r c N),
-            "bson"
-            ),
-        data
-    )
-    return true
-end
-
 dicts = dict_list(general_args_new)
-map(cross_estimation_new, dicts)
+map(cross_estimation, dicts)
 
 # load one of the files to be sure everything is ok:
-filename = readdir(datadir("results", "sym"))[1]
-file = load(datadir("results", "sym", filename))
+filename = readdir(datadir("results", "bocf"))[1]
+file = load(datadir("results", "bocf", filename))
 ```
 
 Alright, now we want to _add_ these new runs to our existing dataframe that has collected all previous results. This is straight-forward:
 ```@example customizing
-res = collect_results!(datadir("results"));
-      black_list = black_list, subfolders = true)
+res = collect_results!(datadir("results"); black_list = bl, subfolders = true)
 
-deletecols!(res, :path) # don't show path
+select!(res, Not(:path)) # don't show path this time
 ```
-(`subfolders = true` ensures that we scan the new data)
-
 All `missing` entries were adjusted automatically :)
