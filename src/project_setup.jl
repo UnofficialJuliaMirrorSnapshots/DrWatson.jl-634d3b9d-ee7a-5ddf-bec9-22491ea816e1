@@ -49,7 +49,16 @@ end
     projectname()
 Return the name of the currently active project.
 """
-projectname() = Pkg.REPLMode.promptf()[2:end-7]
+projectname() = _projectname(try
+                                Pkg.Types.read_project(Base.active_project())
+                             catch
+                                nothing
+                             end)
+_projectname(pkg) = pkg.name
+# Pkg in julia 1.0 returns a dict
+_projectname(pkg::Dict) = pkg["name"]
+_projectname(::Nothing) = nothing
+
 
 """
     findproject(path = pwd()) -> project_path
@@ -213,6 +222,10 @@ function initialize_project(path, name = basename(path);
     if !(authors === nothing)
             w *= "authors = "*sprint(show, vecstring(authors))*"\n"
     end
+    w *= """
+        [compat]
+        julia = "$VERSION"
+        """
     write(joinpath(path, "Project.toml"), w, pro)
     push!(files, "Project.toml")
 
